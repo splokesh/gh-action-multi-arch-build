@@ -1,0 +1,111 @@
+name: build-image
+
+on:
+  push:
+    branches:
+      - master
+      - staging
+      - develop
+    tags:
+      - v*
+
+# # permissions are needed if pushing to ghcr.io
+# permissions:
+#   packages: write
+#   repository-projects: write
+
+jobs:
+  version:
+    name: Bumping Version
+    runs-on: ubuntu-latest
+    if: ${{ !startsWith(github.event.head_commit.message, 'Bumping the version number to') || !startsWith(github.ref, 'refs/tags/v')}}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - run: git config --global user.name 'Github CI'
+      - run: git config --global user.email 'splokesh@happy.com'
+      - run: git pull
+      - run: npm version patch -m "Bumping the version number to %s via github action"
+      - run: git push
+
+  build:
+    name: Packaging App
+    runs-on: ubuntu-latest
+    needs: [version]
+    steps:
+      - name: Repo Checkout
+        uses: actions/checkout@v3
+      - run: git pull
+      - name: Setting-up NODE
+        uses: actions/setup-node@v2
+        with:
+          node-version: '12.x'
+      # https://github.com/docker/setup-qemu-action
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+      # https://github.com/docker/setup-buildx-action
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v1
+      - name: Login to GHCR registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: |
+          IMAGE_NAME=$(jq -r '.name' package.json)
+          VERSION=$(jq -r '.version' package.json)
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v3
+        with:
+          # list of Docker images to use as base name for tags
+          images: |
+            ${{ github.repository }}/crm-b2b-frontend
+          # Docker tags based on the following events/attributes
+          tags: |
+            type=schedule,pattern={{date 'YYYYMMDD'}}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+      - name: Installing deps
+        run: npm ci
+      - name: Installing DOPPLER
+        run: |
+          #sudo (curl -Ls https://cli.doppler.com/install.sh || wget -qO- https://cli.doppler.com/install.sh) | sh
+          # Install pre-reqs
+          sudo apt-get update && sudo apt-get install -y apt-transport-https ca-certificates curl gnupg
+
+          # Add Doppler's GPG key
+          curl -sLf --retry 3 --tlsv1.2 --proto "=https" 'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key' | sudo apt-key add -
+
+          # Add Doppler's apt repo
+          echo "deb https://packages.doppler.com/public/cli/deb/debian any-version main" | sudo tee /etc/apt/sources.list.d/doppler-cli.list
+
+          # Fetch and install latest doppler cli
+          sudo apt-get update && sudo apt-get install doppler
+      - name: Doppler Setup PROD -- if tags or Master branch
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/master' }}
+        run: doppler setup --token=${{ secrets.DOPPLER_TOKEN_FRONTEND_PROD }} --no-interactive
+      - name: Doppler Setup STAGING
+        if: github.ref == 'refs/heads/staging' # if branch is staging
+        run: doppler setup --token=${{ secrets.DOPPLER_TOKEN_FRONTEND_STAGING }} --no-interactive
+      - name: Doppler Setup QA
+        if: github.ref == 'refs/heads/develop' # if branch is develop
+        run: doppler setup --token=${{ secrets.DOPPLER_TOKEN_FRONTEND_QA }} --no-interactive
+      - name: Build Core FE-- Sentry Release
+        run: doppler run -- npm run sentry:release
+      - name: Webform Build -- Sentry Release
+        run: doppler run -- npm run sentry:release:webform
+      - run: echo ${{ github.event_name }}
+      - name: Building Docker Image
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
