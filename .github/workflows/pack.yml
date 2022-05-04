@@ -15,28 +15,9 @@ permissions:
   contents: write
 
 jobs:
-  version:
-    name: Bumping Version
-    runs-on: ubuntu-latest
-    if: ${{ !startsWith(github.event.head_commit.message, 'Bumping the version number to') || !startsWith(github.ref, 'refs/tags/v')}}
-    steps:
-      - name: Setting-up NODE
-        uses: actions/setup-node@v2
-        with:
-          node-version: '16.x'
-      - uses: actions/checkout@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - run: git config --global user.name 'Github CI'
-      - run: git config --global user.email 'cicd@happy.com'
-      - run: git pull
-      - run: npm version patch -m "Bumping the version number to %s via github action"
-      - run: git push
-
   build:
     name: Packaging App
     runs-on: ubuntu-latest
-    needs: [version]
     steps:
       - name: Repo Checkout
         uses: actions/checkout@v3
@@ -53,16 +34,16 @@ jobs:
         id: buildx
         uses: docker/setup-buildx-action@v1
       - run: |
-          echo ${{ github }}
           IMAGE_NAME=$(jq -r '.name' package.json)
           VERSION=$(jq -r '.version' package.json)
+          echo $IMAGE_NAME $VERSION
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v3
         with:
           # list of Docker images to use as base name for tags
           images: |
-            ghcr.io/${{ github.repository }}/app
+            ghcr.io/${{ github.repository }}/${{env.IMAGE_NAME}}
           # Docker tags based on the following events/attributes
           tags: |
             type=schedule,pattern={{date 'YYYYMMDD'}}
