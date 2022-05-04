@@ -12,7 +12,7 @@ on:
 # # permissions are needed if pushing to ghcr.io
 permissions:
   packages: write
-  repository-projects: write
+  contents: write
 
 jobs:
   version:
